@@ -46,7 +46,6 @@ def get_client():
 with st.sidebar:
     st.image("https://img.icons8.com/color/96/pill.png", width=60)
     st.title("Pharma Analyst AI")
-    st.caption("Powered by Groq · llama-3.3-70b")
     st.divider()
 
     try:
