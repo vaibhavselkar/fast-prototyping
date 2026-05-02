@@ -184,7 +184,7 @@ if prompt := st.chat_input("Ask anything about the pharma sales data..."):
                 label for kw, label in section_keywords.items()
                 if kw.lower() in full_response.lower()
             ]
-            source_sections = ", ".join(used) if used else "General dataset overview"
+            source_sections = ", ".join(used) if used else ""
 
             if source_sections:
                 with st.expander("📂 Data sections used", expanded=False):
