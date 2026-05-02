@@ -117,17 +117,12 @@ if not st.session_state.messages:
 # Pick up a pending suggestion
 _pending = st.session_state.pop("pending_question", None)
 
-
 # ── Render chat history ───────────────────────────────────────────────────────
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"], avatar="🧑" if msg["role"] == "user" else "💊"):
         st.markdown(msg["content"])
-        if msg["role"] == "assistant":
-            if msg.get("disclaimer"):
-                st.caption(f"*{msg['disclaimer']}*")
-            if msg.get("source_sections"):
-                with st.expander("📂 Data sections used", expanded=False):
-                    st.caption(msg["source_sections"])
+        if msg["role"] == "assistant" and msg.get("disclaimer"):
+            st.caption(f"*{msg['disclaimer']}*")
 
 # ── Chat input ────────────────────────────────────────────────────────────────
 _typed = st.chat_input("Ask anything about the pharma sales data...")
@@ -141,7 +136,6 @@ if prompt:
     with st.chat_message("assistant", avatar="💊"):
         placeholder = st.empty()
         full_response = ""
-        source_sections = ""
         disclaimer = None
 
         try:
@@ -166,32 +160,9 @@ if prompt:
 
             placeholder.markdown(full_response)
 
-            # Verification — silent if verified, one line only if flagged
             disclaimer = verify_answer(full_response, get_verification_facts())
             if disclaimer:
                 st.caption(f"*{disclaimer}*")
-
-            section_keywords = {
-                "REP SCORECARD":       "Rep Scorecard",
-                "TERRITORY SCORECARD": "Territory Scorecard",
-                "BRANDS":              "Brand TRx/NRx Totals",
-                "QUARTERLY RX TREND":  "Quarterly Rx Trend",
-                "HCP CALL COVERAGE":   "HCP Call Coverage",
-                "FLAGGED INSIGHTS":    "Flagged Insights & Alerts",
-                "PAYOR MIX":           "Payor Mix",
-                "MARKET SHARE":        "Market Share (LN Metrics)",
-                "HCP TIER":            "HCP Tier Breakdown",
-                "ACTIVITY TYPE":       "Activity Type Mix",
-            }
-            used = [
-                label for kw, label in section_keywords.items()
-                if kw.lower() in full_response.lower()
-            ]
-            source_sections = ", ".join(used) if used else ""
-
-            if source_sections:
-                with st.expander("📂 Data sections used", expanded=False):
-                    st.caption(source_sections)
 
         except Exception as e:
             full_response = (
@@ -203,6 +174,5 @@ if prompt:
     st.session_state.messages.append({
         "role": "assistant",
         "content": full_response,
-        "source_sections": source_sections,
         "disclaimer": disclaimer,
     })
