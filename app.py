@@ -110,9 +110,13 @@ if not st.session_state.messages:
     cols = st.columns(2)
     for i, s in enumerate(SUGGESTIONS):
         if cols[i % 2].button(s, key=f"s{i}", use_container_width=True):
-            st.session_state.messages.append({"role": "user", "content": s})
+            st.session_state["pending_question"] = s
             st.rerun()
     st.divider()
+
+# Pick up a pending suggestion
+_pending = st.session_state.pop("pending_question", None)
+
 
 # ── Render chat history ───────────────────────────────────────────────────────
 for msg in st.session_state.messages:
@@ -126,11 +130,10 @@ for msg in st.session_state.messages:
                     st.caption(msg["source_sections"])
 
 # ── Chat input ────────────────────────────────────────────────────────────────
-if prompt := st.chat_input("Ask anything about the pharma sales data..."):
-    if not prompt.strip():
-        st.warning("Please enter a question.")
-        st.stop()
+_typed = st.chat_input("Ask anything about the pharma sales data...")
+prompt = _pending or (_typed if _typed and _typed.strip() else None)
 
+if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user", avatar="🧑"):
         st.markdown(prompt)
