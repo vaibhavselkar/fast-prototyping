@@ -26,6 +26,8 @@ from data_engine import (
     compute_payor_summary,
     compute_market_share,
     compute_insights,
+    build_verification_facts,
+    verify_answer,
     get_groq_client,
     ask_question,
     build_system_prompt,
@@ -961,3 +963,193 @@ class TestEndToEnd:
         }
         context = build_context(single)
         assert "Only Rep" in context or "Territory 1" in context
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 16. BUILD VERIFICATION FACTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestBuildVerificationFacts:
+    def test_returns_dict(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        assert isinstance(result, dict)
+
+    def test_non_empty(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        assert len(result) > 0
+
+    def test_brand_keys_present(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        keys = list(result.keys())
+        assert any("TRx" in k for k in keys)
+        assert any("NRx" in k for k in keys)
+
+    def test_territory_keys_present(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        assert any("Territory" in k for k in result.keys())
+
+    def test_rep_keys_present(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        assert any("activities" in k for k in result.keys())
+
+    def test_hcp_coverage_keys_present(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        assert "Total HCPs" in result
+        assert "HCPs never called" in result
+
+    def test_all_values_are_numeric(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        for k, v in result.items():
+            assert isinstance(v, (int, float)), f"{k} is not numeric: {v}"
+
+    def test_empty_fact_rx_does_not_crash(self, minimal_data):
+        minimal_data["fact_rx"] = pd.DataFrame(
+            columns=minimal_data["fact_rx"].columns
+        )
+        result = build_verification_facts(minimal_data)
+        assert isinstance(result, dict)
+
+    def test_empty_fact_rep_act_does_not_crash(self, minimal_data):
+        minimal_data["fact_rep_act"] = pd.DataFrame(
+            columns=minimal_data["fact_rep_act"].columns
+        )
+        result = build_verification_facts(minimal_data)
+        assert isinstance(result, dict)
+
+    def test_brand_trx_value_matches_raw_sum(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        expected_trx = int(
+            minimal_data["fact_rx"][
+                minimal_data["fact_rx"]["brand_code"] == "BRANDX"
+            ]["trx_cnt"].sum()
+        )
+        assert result.get("BRANDX total TRx") == expected_trx
+
+    def test_total_hcps_matches_dim(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        assert result["Total HCPs"] == len(minimal_data["hcp_dim"])
+
+    def test_total_reps_matches_dim(self, minimal_data):
+        result = build_verification_facts(minimal_data)
+        assert result["Total reps"] == len(minimal_data["rep_dim"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 17. VERIFY ANSWER
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestVerifyAnswer:
+    @pytest.fixture
+    def facts(self, minimal_data):
+        return build_verification_facts(minimal_data)
+
+    # ── Returns None (nothing to show) scenarios ──────────────────────────────
+
+    def test_greeting_returns_none(self, facts):
+        assert verify_answer("Hi! How can I help you today?", facts) is None
+
+    def test_no_numbers_returns_none(self, facts):
+        assert verify_answer("NRx stands for new prescriptions.", facts) is None
+
+    def test_empty_string_returns_none(self, facts):
+        assert verify_answer("", facts) is None
+
+    def test_none_answer_returns_none(self, facts):
+        assert verify_answer(None, facts) is None
+
+    def test_very_short_answer_returns_none(self, facts):
+        # Under 20 chars — treated as conversational
+        assert verify_answer("Hello!", facts) is None
+
+    def test_i_dont_know_returns_none(self, facts):
+        answer = "I don't have enough data to answer that question."
+        assert verify_answer(answer, facts) is None
+
+    def test_verified_answer_returns_none(self, minimal_data, facts):
+        # Build an answer that contains a known fact value
+        trx_val = int(minimal_data["fact_rx"]["trx_cnt"].sum())
+        answer = f"The total TRx across all brands is {trx_val}."
+        result = verify_answer(answer, facts)
+        assert result is None  # verified → show nothing
+
+    def test_verified_with_comma_formatted_number(self, facts):
+        # e.g. "26,059" should match fact value 26059
+        for label, val in facts.items():
+            if int(val) > 999:
+                formatted = f"{int(val):,}"
+                answer = f"The total is {formatted} as per the dataset."
+                result = verify_answer(answer, facts)
+                assert result is None
+                break
+
+    def test_verified_with_decimal_number(self, facts):
+        # Find a float fact and put it in the answer
+        for label, val in facts.items():
+            if isinstance(val, float) and val != int(val):
+                answer = f"The rate is {val}% according to the data."
+                result = verify_answer(answer, facts)
+                assert result is None
+                break
+
+    # ── Returns disclaimer string (flagged) scenarios ─────────────────────────
+
+    def test_made_up_number_returns_disclaimer(self, facts):
+        # Use a number guaranteed not in any fact and avoid small numbers
+        # that appear naturally in text (e.g. "1" from "Territory 1")
+        answer = "The total visit count was exactly 777777 last quarter."
+        result = verify_answer(answer, facts)
+        assert result is not None
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_disclaimer_is_professional(self, facts):
+        answer = "The completion rate is 12345.67% which is very high."
+        result = verify_answer(answer, facts)
+        if result:
+            assert "critical decisions" in result.lower() or "verify" in result.lower()
+            # Should NOT contain technical jargon
+            assert "regex" not in result.lower()
+            assert "dict" not in result.lower()
+            assert "error" not in result.lower()
+
+    def test_disclaimer_is_single_line(self, facts):
+        answer = "There are 99999 reps covering 88888 territories."
+        result = verify_answer(answer, facts)
+        if result:
+            assert "\n" not in result
+
+    def test_empty_facts_dict_with_numbers_returns_disclaimer(self):
+        answer = "The TRx count is 500 and NRx is 200."
+        result = verify_answer(answer, {})
+        assert result is not None
+
+    # ── Edge cases ────────────────────────────────────────────────────────────
+
+    def test_whitespace_only_answer_returns_none(self, facts):
+        assert verify_answer("     ", facts) is None
+
+    def test_answer_with_year_number(self, facts):
+        # Years like 2024 should not trigger false flags
+        answer = "The data covers the year 2024 with quarterly breakdowns."
+        # 2024 may or may not be in facts — just should not crash
+        result = verify_answer(answer, facts)
+        assert result is None or isinstance(result, str)
+
+    def test_large_answer_does_not_crash(self, facts):
+        long_answer = ("The analysis shows various metrics. " * 100) + "Total is 99999999."
+        result = verify_answer(long_answer, facts)
+        assert result is None or isinstance(result, str)
+
+    def test_unicode_in_answer_does_not_crash(self, facts):
+        answer = "El total de TRx es 99999 en el territorio número uno."
+        result = verify_answer(answer, facts)
+        assert result is None or isinstance(result, str)
+
+    def test_percentage_sign_numbers(self, facts):
+        # "87.5%" — should extract 87.5 correctly
+        for label, val in facts.items():
+            if "completion" in label.lower() or "pct" in label.lower():
+                answer = f"The completion rate is {val}% which is above average."
+                result = verify_answer(answer, facts)
+                assert result is None  # should be verified
+                break

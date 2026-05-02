@@ -233,6 +233,14 @@ def compute_territory_scorecard(
         )
 
     summary = rx_terr.join(act_terr, how="outer").join(hcp_terr, how="outer").fillna(0)
+
+    # Ensure Rx columns exist even when fact_rx was empty
+    for col in ["trx_cnt", "nrx_cnt"]:
+        if col not in summary.columns:
+            summary[col] = 0
+    if "activity_count" not in summary.columns:
+        summary["activity_count"] = 0
+
     summary["trx_per_hcp"] = summary.apply(
         lambda r: _safe_div(r["trx_cnt"], r["hcp_count"]), axis=1
     )
@@ -575,6 +583,107 @@ def build_context(data: dict[str, pd.DataFrame]) -> str:
             lines.append(f"  {spec}: {cnt} HCPs")
 
     return "\n".join(lines)
+
+
+# ── Verification layer ────────────────────────────────────────────────────────
+
+def build_verification_facts(data: dict) -> dict:
+    """Pre-compute a flat {label: value} dict at startup for fast lookup."""
+    facts = {}
+
+    fact_rx       = data["fact_rx"]
+    fact_rep_act  = data["fact_rep_act"]
+    hcp_dim       = data["hcp_dim"]
+    rep_dim       = data["rep_dim"]
+    territory_dim = data["territory_dim"]
+    account_dim   = data["account_dim"]
+
+    if not fact_rx.empty:
+        for brand, grp in fact_rx.groupby("brand_code"):
+            b = brand.upper()
+            trx = int(grp["trx_cnt"].sum())
+            nrx = int(grp["nrx_cnt"].sum())
+            facts[f"{b} total TRx"] = trx
+            facts[f"{b} total NRx"] = nrx
+            facts[f"{b} NRx%"]      = round(_safe_pct(nrx, trx), 1)
+
+    terr_sc = compute_territory_scorecard(
+        fact_rx, fact_rep_act, hcp_dim, rep_dim, territory_dim, account_dim
+    )
+    for terr, row in terr_sc.iterrows():
+        t = str(terr).title()
+        facts[f"{t} TRx"]         = int(row.get("trx_cnt", 0))
+        facts[f"{t} NRx"]         = int(row.get("nrx_cnt", 0))
+        facts[f"{t} TRx per HCP"] = float(row.get("trx_per_hcp", 0))
+        facts[f"{t} HCP count"]   = int(row.get("hcp_count", 0))
+        facts[f"{t} activities"]  = int(row.get("activity_count", 0))
+
+    rep_sc = compute_rep_scorecard(fact_rep_act, rep_dim, hcp_dim)
+    for rep, row in rep_sc.iterrows():
+        r = str(rep).title()
+        facts[f"{r} activities"]      = int(row["total_activities"])
+        facts[f"{r} unique HCPs"]     = int(row["unique_hcps"])
+        facts[f"{r} completion rate"] = float(row["completion_rate"])
+        facts[f"{r} Tier A calls"]    = int(row.get("tier_a_calls", 0))
+        facts[f"{r} Tier A pct"]      = float(row.get("tier_a_pct", 0))
+
+    hcp_cov = compute_hcp_coverage(fact_rep_act, hcp_dim)
+    facts["Total HCPs"]        = hcp_cov["total_hcps"]
+    facts["HCPs called"]       = hcp_cov["called_hcps"]
+    facts["HCPs never called"] = hcp_cov["never_called"]
+    facts["HCP coverage pct"]  = hcp_cov["coverage_pct"]
+
+    ms = compute_market_share(data["fact_ln"])
+    facts["Overall avg market share"]  = ms["overall_avg"]
+    facts["Overall avg patient count"] = ms["overall_patient_avg"]
+
+    facts["Total reps"]             = len(rep_dim)
+    facts["Total HCP records"]      = len(hcp_dim)
+    facts["Total accounts"]         = len(account_dim)
+    facts["Total territories"]      = len(territory_dim)
+    facts["Total Rx records"]       = len(fact_rx)
+    facts["Total activity records"] = len(fact_rep_act)
+
+    return facts
+
+
+def verify_answer(answer: str, facts: dict) -> str | None:
+    """
+    Check if the answer's numbers match known facts.
+
+    Returns:
+        None   — if no numbers in answer (nothing to verify, show nothing)
+        None   — if numbers match known facts (verified, show nothing)
+        str    — a single disclaimer line if numbers don't match (flagged)
+    """
+    import re
+
+    # No answer or too short — nothing to verify
+    if not answer or len(answer.strip()) < 20:
+        return None
+
+    # Extract numbers from the answer
+    raw = re.findall(r"\b\d{1,3}(?:,\d{3})*(?:\.\d+)?|\b\d+(?:\.\d+)?\b", answer)
+    extracted = set()
+    for n in raw:
+        try:
+            extracted.add(float(n.replace(",", "")))
+        except ValueError:
+            pass
+
+    # No numbers found — conversational answer, nothing to verify
+    if not extracted:
+        return None
+
+    # Check extracted numbers against known facts
+    for fact_val in facts.values():
+        if round(float(fact_val), 1) in extracted or float(int(fact_val)) in extracted:
+            return None  # verified — show nothing
+
+    # Numbers present but none matched — show one quiet line
+    return "For critical decisions, please verify this against the source data."
+
+
 
 
 # ── Groq client ───────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-load_dotenv()  # loads .env file from the project folder automatically
+load_dotenv()
 
 import streamlit as st
 from data_engine import (
@@ -8,6 +8,8 @@ from data_engine import (
     build_context,
     build_system_prompt,
     get_groq_client,
+    build_verification_facts,
+    verify_answer,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -26,8 +28,11 @@ def get_data():
 
 @st.cache_data(show_spinner="Building analytics context...")
 def get_context():
-    data = get_data()
-    return build_context(data)
+    return build_context(get_data())
+
+@st.cache_data(show_spinner=False)
+def get_verification_facts():
+    return build_verification_facts(get_data())
 
 @st.cache_resource
 def get_client():
@@ -68,7 +73,6 @@ with st.sidebar:
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.title("💊 Pharma Sales AI Analyst")
 
-# Check API key early
 client = get_client()
 if client is None:
     st.error(
@@ -78,7 +82,6 @@ if client is None:
     )
     st.stop()
 
-# Build context
 try:
     context = get_context()
     system_prompt = build_system_prompt(context)
@@ -90,7 +93,7 @@ except Exception as e:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ── Suggested questions (shown only on empty chat) ────────────────────────────
+# ── Suggested questions ───────────────────────────────────────────────────────
 SUGGESTIONS = [
     "Which rep has the lowest Tier A HCP coverage?",
     "Is NRx growing or declining quarter over quarter?",
@@ -115,9 +118,12 @@ if not st.session_state.messages:
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"], avatar="🧑" if msg["role"] == "user" else "💊"):
         st.markdown(msg["content"])
-        if msg["role"] == "assistant" and msg.get("source_sections"):
-            with st.expander("📂 Data sections used", expanded=False):
-                st.caption(msg["source_sections"])
+        if msg["role"] == "assistant":
+            if msg.get("disclaimer"):
+                st.caption(f"*{msg['disclaimer']}*")
+            if msg.get("source_sections"):
+                with st.expander("📂 Data sections used", expanded=False):
+                    st.caption(msg["source_sections"])
 
 # ── Chat input ────────────────────────────────────────────────────────────────
 if prompt := st.chat_input("Ask anything about the pharma sales data..."):
@@ -132,6 +138,8 @@ if prompt := st.chat_input("Ask anything about the pharma sales data..."):
     with st.chat_message("assistant", avatar="💊"):
         placeholder = st.empty()
         full_response = ""
+        source_sections = ""
+        disclaimer = None
 
         try:
             history = [
@@ -155,18 +163,22 @@ if prompt := st.chat_input("Ask anything about the pharma sales data..."):
 
             placeholder.markdown(full_response)
 
-            # Detect which data sections the response referenced
+            # Verification — silent if verified, one line only if flagged
+            disclaimer = verify_answer(full_response, get_verification_facts())
+            if disclaimer:
+                st.caption(f"*{disclaimer}*")
+
             section_keywords = {
-                "REP SCORECARD":          "Rep Scorecard",
-                "TERRITORY SCORECARD":    "Territory Scorecard",
-                "BRANDS":                 "Brand TRx/NRx Totals",
-                "QUARTERLY RX TREND":     "Quarterly Rx Trend",
-                "HCP CALL COVERAGE":      "HCP Call Coverage",
-                "FLAGGED INSIGHTS":       "Flagged Insights & Alerts",
-                "PAYOR MIX":              "Payor Mix",
-                "MARKET SHARE":           "Market Share (LN Metrics)",
-                "HCP TIER":               "HCP Tier Breakdown",
-                "ACTIVITY TYPE":          "Activity Type Mix",
+                "REP SCORECARD":       "Rep Scorecard",
+                "TERRITORY SCORECARD": "Territory Scorecard",
+                "BRANDS":              "Brand TRx/NRx Totals",
+                "QUARTERLY RX TREND":  "Quarterly Rx Trend",
+                "HCP CALL COVERAGE":   "HCP Call Coverage",
+                "FLAGGED INSIGHTS":    "Flagged Insights & Alerts",
+                "PAYOR MIX":           "Payor Mix",
+                "MARKET SHARE":        "Market Share (LN Metrics)",
+                "HCP TIER":            "HCP Tier Breakdown",
+                "ACTIVITY TYPE":       "Activity Type Mix",
             }
             used = [
                 label for kw, label in section_keywords.items()
@@ -174,17 +186,20 @@ if prompt := st.chat_input("Ask anything about the pharma sales data..."):
             ]
             source_sections = ", ".join(used) if used else "General dataset overview"
 
+            if source_sections:
+                with st.expander("📂 Data sections used", expanded=False):
+                    st.caption(source_sections)
+
         except Exception as e:
             full_response = (
-                f"⚠️ Sorry, I ran into an error while processing your question.\n\n"
-                f"**Details:** `{e}`\n\n"
-                "Please try rephrasing or check that the Groq API is reachable."
+                "I'm sorry, I ran into an issue processing your question. "
+                "Please try rephrasing or ask something else."
             )
             placeholder.markdown(full_response)
-            source_sections = ""
 
     st.session_state.messages.append({
         "role": "assistant",
         "content": full_response,
         "source_sections": source_sections,
+        "disclaimer": disclaimer,
     })
