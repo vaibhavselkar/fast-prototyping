@@ -43,7 +43,6 @@ Built a pure Python analytics engine (no Streamlit dependency) that:
 - Streaming chat UI (responses appear word by word)
 - Sidebar with live dataset metrics
 - 8 suggested questions on first load
-- Source citation expander below every answer showing which data sections were used
 - Graceful error handling for API failures and out-of-scope questions
 
 ### Step 5 — Why Answers Are Accurate (Prompt Engineering)
@@ -51,8 +50,7 @@ Most AI chat tools search for keywords and guess. This system works differently:
 
 - **No guessing from raw data** — Pandas pre-computes every aggregation (totals, averages, rankings, QoQ growth rates) before the LLM sees anything. The LLM reasons over real numbers, not raw rows.
 - **Insights are pre-flagged** — the data engine automatically labels ALERT / WARN / CRITICAL / POSITIVE signals before the question is even asked, so the LLM has business context baked in.
-- **Strict system prompt** — the LLM is instructed to: cite the exact data section it is drawing from, show numbers side by side when comparing, and explicitly say "I don't have enough data" when a question is out of scope. It cannot make up figures.
-- **Source citations** — every answer in the UI shows which data sections were used (e.g. "REP SCORECARD", "TERRITORY SCORECARD"), so the user can verify the reasoning.
+- **Strict system prompt** — the LLM is instructed to show numbers side by side when comparing, and explicitly say "I don't have enough data" when a question is out of scope. It cannot make up figures.
 - **Scoped knowledge** — the LLM only knows what the dataset contains. It will not hallucinate competitor data or external market figures.
 
 ### Step 6 — Verification Layer (`data_engine.py`)
