@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# macOS junk
+__MACOSX/
+.DS_Store
+
+# pytest cache
+.pytest_cache/
+
+# VS Code
+.vscode/
